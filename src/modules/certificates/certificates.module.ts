@@ -3,14 +3,16 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { CertificatesService } from './certificates.service';
 import { CertificatesController } from './certificates.controller';
 import { Certificate } from './entities/certificate.entity';
-// import { BlockchainModule } from '../blockchain/blockchain.module'; // DISABLED
+import { BlockchainModule } from '../blockchain/blockchain.module';
 import { PdfGeneratorModule } from '../pdf-generator/pdf-generator.module';
+import { UniversitiesModule } from '../universities/universities.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Certificate]),
-    // BlockchainModule, // DISABLED - Will be enabled when blockchain is ready
+    BlockchainModule,
     PdfGeneratorModule,
+    UniversitiesModule,
   ],
   controllers: [CertificatesController],
   providers: [CertificatesService],

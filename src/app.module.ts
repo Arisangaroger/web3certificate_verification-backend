@@ -6,10 +6,10 @@ import { UniversitiesModule } from './modules/universities/universities.module';
 import { StudentsModule } from './modules/students/students.module';
 import { CertificatesModule } from './modules/certificates/certificates.module';
 import { AdminUsersModule } from './modules/admin-users/admin-users.module';
-// import { BlockchainModule } from './modules/blockchain/blockchain.module'; // DISABLED
+import { BlockchainModule } from './modules/blockchain/blockchain.module';
 import { PdfGeneratorModule } from './modules/pdf-generator/pdf-generator.module';
 import { QrCodeModule } from './modules/qr-code/qr-code.module';
-// import { VerificationModule } from './modules/verification/verification.module'; // DISABLED
+import { VerificationModule } from './modules/verification/verification.module';
 import { FileUploadModule } from './modules/file-upload/file-upload.module';
 import { NotificationModule } from './modules/notification/notification.module';
 
@@ -35,10 +35,10 @@ import { NotificationModule } from './modules/notification/notification.module';
     StudentsModule,
     CertificatesModule,
     AdminUsersModule,
-    // BlockchainModule, // DISABLED - Will be enabled when blockchain is ready
+    BlockchainModule,
     PdfGeneratorModule,
     QrCodeModule,
-    // VerificationModule, // DISABLED - Will be enabled when blockchain is ready
+    VerificationModule,
     FileUploadModule,
     NotificationModule,
   ],

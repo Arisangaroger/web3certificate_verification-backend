@@ -22,7 +22,7 @@ export class Certificate {
   @Column({ type: 'varchar', length: 100, nullable: true })
   class_award: string;
 
-  @Column({ type: 'varchar', length: 64 })
+  @Column({ type: 'varchar', length: 66, nullable: true })
   data_hash: string;
 
   @Column({ type: 'text', nullable: true, default: null })

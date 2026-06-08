@@ -36,6 +36,50 @@ export class CertificatesService {
     });
   }
 
+  async update(id: string, updateData: Partial<Certificate>): Promise<Certificate> {
+    // Don't allow updating if already on blockchain
+    const certificate = await this.certificatesRepository.findOne({
+      where: { id },
+    });
+
+    if (!certificate) {
+      throw new Error('Certificate not found');
+    }
+
+    if (certificate.blockchain_transaction_hash) {
+      throw new Error('Cannot edit certificate that is already on blockchain');
+    }
+
+    await this.certificatesRepository.update(id, updateData);
+    const updated = await this.certificatesRepository.findOne({
+      where: { id },
+      relations: ['student', 'university'],
+    });
+
+    if (!updated) {
+      throw new Error('Certificate not found after update');
+    }
+
+    return updated;
+  }
+
+  async delete(id: string): Promise<void> {
+    // Don't allow deleting if already on blockchain
+    const certificate = await this.certificatesRepository.findOne({
+      where: { id },
+    });
+
+    if (!certificate) {
+      throw new Error('Certificate not found');
+    }
+
+    if (certificate.blockchain_transaction_hash) {
+      throw new Error('Cannot delete certificate that is already on blockchain');
+    }
+
+    await this.certificatesRepository.delete(id);
+  }
+
   async getStats() {
     const [total, verified, issued] = await Promise.all([
       this.certificatesRepository.count(),

@@ -1,13 +1,24 @@
-import { Controller, Get, Param, Res } from '@nestjs/common';
+import { Controller, Get, Param, Res, Post, Body, UseGuards, BadRequestException, NotFoundException, Patch, Delete } from '@nestjs/common';
 import type { Response } from 'express';
 import { CertificatesService } from './certificates.service';
 import { PdfGeneratorService } from '../pdf-generator/pdf-generator.service';
+import { BlockchainService } from '../blockchain/blockchain.service';
+import { UniversitiesService } from '../universities/universities.service';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { In } from 'typeorm';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { Certificate } from './entities/certificate.entity';
 
 @Controller('certificates')
 export class CertificatesController {
   constructor(
     private readonly certificatesService: CertificatesService,
     private readonly pdfGeneratorService: PdfGeneratorService,
+    private readonly blockchainService: BlockchainService,
+    private readonly universitiesService: UniversitiesService,
+    @InjectRepository(Certificate)
+    private readonly certificatesRepository: Repository<Certificate>,
   ) {}
 
   @Get('student/:studentId')
@@ -28,6 +39,126 @@ export class CertificatesController {
   @Get('university/:universityId/stats')
   async getStatsByUniversity(@Param('universityId') universityId: string) {
     return this.certificatesService.getStatsByUniversity(universityId);
+  }
+
+  /**
+   * Issue certificates to blockchain
+   * Batch issues selected certificates to Optimism blockchain
+   */
+  @Post('issue-to-blockchain/:universityId')
+  @UseGuards(JwtAuthGuard)
+  async issueToBlockchain(
+    @Param('universityId') universityId: string,
+    @Body() body: { certificateIds: string[] }
+  ) {
+    // 1. Validate input
+    if (!body.certificateIds || body.certificateIds.length === 0) {
+      throw new BadRequestException('No certificates selected');
+    }
+
+    // 2. Load university with blockchain identity
+    const university = await this.universitiesService.findOne(universityId);
+    
+    if (!university.did_identifier) {
+      throw new BadRequestException(
+        'University does not have blockchain identity configured. Contact system administrator.'
+      );
+    }
+
+    // 3. Load certificates with student relations
+    const certificates = await this.certificatesRepository.find({
+      where: { 
+        id: In(body.certificateIds),
+        university_id: universityId
+      },
+      relations: ['student']
+    });
+
+    if (!certificates.length) {
+      throw new NotFoundException('No certificates found with provided IDs');
+    }
+
+    // 4. Verify all certificates have required student data
+    for (const cert of certificates) {
+      if (!cert.student) {
+        throw new BadRequestException(
+          `Certificate ${cert.id} is missing student data`
+        );
+      }
+    }
+
+    // 5. Issue to blockchain
+    const txHash = await this.blockchainService.issueCertificatesBatch(
+      certificates,
+      university.did_identifier
+    );
+
+    // 6. Update database with transaction hash - Update each certificate individually to ensure it works
+    const updatePromises = body.certificateIds.map(certId =>
+      this.certificatesRepository.update(
+        { id: certId },
+        {
+          blockchain_transaction_hash: txHash,
+          verification_status: 'VERIFIED'
+        }
+      )
+    );
+    
+    await Promise.all(updatePromises);
+
+    // Log for debugging
+    console.log(`✅ Updated ${body.certificateIds.length} certificates to VERIFIED status`);
+    console.log(`Transaction hash: ${txHash}`);
+
+    // 7. Return success response
+    return {
+      success: true,
+      transactionHash: txHash,
+      certificatesIssued: certificates.length,
+      explorerUrl: `https://sepolia-optimistic.etherscan.io/tx/${txHash}`
+    };
+  }
+
+  /**
+   * Update certificate details (only if not yet on blockchain)
+   */
+  @Patch(':certificateId')
+  @UseGuards(JwtAuthGuard)
+  async updateCertificate(
+    @Param('certificateId') certificateId: string,
+    @Body() updateData: {
+      degree_title?: string;
+      graduation_year?: number;
+      class_award?: string;
+    }
+  ) {
+    try {
+      const updated = await this.certificatesService.update(certificateId, updateData);
+      return {
+        success: true,
+        message: 'Certificate updated successfully',
+        certificate: updated
+      };
+    } catch (error: any) {
+      throw new BadRequestException(error.message);
+    }
+  }
+
+  /**
+   * Delete certificate (only if not yet on blockchain)
+   */
+  @Delete(':certificateId')
+  @UseGuards(JwtAuthGuard)
+  async deleteCertificate(@Param('certificateId') certificateId: string) {
+    try {
+      await this.certificatesService.delete(certificateId);
+      return {
+        success: true,
+        message: 'Certificate deleted successfully'
+      };
+    } catch (error: any) {
+      throw new BadRequestException(error.message);
+    }
   }
 
   @Get(':certificateId/download')

@@ -1,57 +1,148 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ethers } from 'ethers';
-import * as crypto from 'crypto';
 
 @Injectable()
 export class BlockchainService {
+  private readonly logger = new Logger(BlockchainService.name);
   private provider: ethers.JsonRpcProvider;
   private wallet: ethers.Wallet;
   private contract: ethers.Contract;
 
+  private readonly REGISTRY_ABI = [
+    'function issueCredentials(bytes32[] calldata _dataHashes, string[] calldata _issuerDids) external',
+    'function revokeCredential(bytes32 _dataHash, string calldata _issuerDid) external',
+    'function getCredential(bytes32 _dataHash) external view returns (string memory issuerDid, uint32 blockTime, bool isRevoked, bool exists)',
+    'function getCredentialsBatch(bytes32[] calldata _dataHashes) external view returns (tuple(string issuerDid, uint32 blockTime, bool isRevoked)[])',
+    'function credentialExists(bytes32 _dataHash) external view returns (bool)',
+    'event CredentialIssued(bytes32 indexed dataHash, string indexed issuerDid, uint32 blockTime)',
+    'event CredentialRevoked(bytes32 indexed dataHash, string indexed issuerDid, address revokedBy, uint32 blockTime)',
+  ];
+
   constructor() {
-    this.provider = new ethers.JsonRpcProvider(process.env.OPTIMISM_RPC_URL || 'https://mainnet.optimism.io');
-    this.wallet = new ethers.Wallet(process.env.WALLET_PRIVATE_KEY || '', this.provider);
-    
-    const contractABI = [
-      'function registerCertificate(bytes32 dataHash, address university) external',
-      'function verifyCertificate(bytes32 dataHash) external view returns (bool, uint256, address)',
-    ];
+    this.provider = new ethers.JsonRpcProvider(
+      process.env.OPTIMISM_SEPOLIA_RPC_URL || 'https://sepolia.optimism.io'
+    );
+    this.wallet = new ethers.Wallet(
+      process.env.OPERATOR_PRIVATE_KEY || '',
+      this.provider
+    );
     
     this.contract = new ethers.Contract(
-      process.env.CONTRACT_ADDRESS || '',
-      contractABI,
+      process.env.CREDENTIAL_REGISTRY_ADDRESS || '',
+      this.REGISTRY_ABI,
       this.wallet,
     );
   }
 
-  generateDataHash(data: any): string {
-    const serialized = JSON.stringify(data, Object.keys(data).sort());
-    return crypto.createHash('sha256').update(serialized).digest('hex');
+  /**
+   * Builds the canonical data string for keccak256 hashing.
+   * Formula: student_id_number + national_id + full_name + degree_title + graduation_year
+   */
+  buildDataString(certificate: any): string {
+    return (
+      (certificate.student?.student_id_number || '') +
+      (certificate.student?.national_id || '') +
+      (certificate.student?.full_name || '') +
+      (certificate.degree_title || '') +
+      String(certificate.graduation_year || '')
+    );
   }
 
-  async registerCertificateBatch(dataHashes: string[]): Promise<any> {
-    const tx = await this.contract.registerCertificate(
-      dataHashes.map(hash => ethers.hexlify(ethers.toUtf8Bytes(hash))),
-      this.wallet.address,
-    );
-    
-    const receipt = await tx.wait();
+  /**
+   * Computes keccak256 hash using Ethereum standard (NOT SHA-256).
+   * Returns 0x-prefixed hex string (66 chars).
+   */
+  generateDataHash(certificate: any): string {
+    const dataString = this.buildDataString(certificate);
+    return ethers.keccak256(ethers.toUtf8Bytes(dataString));
+  }
+
+  /**
+   * Issues a batch of credentials on-chain via issueCredentials function.
+   * @param certificates - Array of certificate objects with populated student relation
+   * @param issuerDid - The university's did_identifier (e.g., "did:key:z6Mkp...")
+   * @returns Transaction hash
+   */
+  async issueCertificatesBatch(
+    certificates: any[],
+    issuerDid: string
+  ): Promise<string> {
+    if (!certificates.length) {
+      throw new Error('Empty certificate batch');
+    }
+
+    const dataHashes = certificates.map(cert => this.generateDataHash(cert));
+    const issuerDids = certificates.map(() => issuerDid);
+
+    this.logger.log(`Minting batch of ${certificates.length} credentials`);
+    this.logger.log(`Issuer DID: ${issuerDid}`);
+
+    try {
+      const gasEstimate = await this.contract.issueCredentials.estimateGas(
+        dataHashes,
+        issuerDids
+      );
+      this.logger.log(`Estimated gas: ${gasEstimate.toString()}`);
+
+      const tx = await this.contract.issueCredentials(dataHashes, issuerDids);
+      this.logger.log(`Transaction submitted: ${tx.hash}`);
+
+      const receipt = await tx.wait(1);
+      this.logger.log(`Transaction confirmed in block ${receipt.blockNumber}`);
+
+      return receipt.hash;
+    } catch (error) {
+      this.logger.error('Batch minting failed:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Revokes a single credential on-chain.
+   * @param dataHash - The keccak256 hash (0x-prefixed)
+   * @param issuerDid - The university's did_identifier
+   * @returns Transaction hash
+   */
+  async revokeCredential(dataHash: string, issuerDid: string): Promise<string> {
+    this.logger.log(`Revoking credential: ${dataHash}`);
+
+    try {
+      const tx = await this.contract.revokeCredential(dataHash, issuerDid);
+      const receipt = await tx.wait(1);
+
+      this.logger.log(`Credential revoked in tx: ${receipt.hash}`);
+      return receipt.hash;
+    } catch (error) {
+      this.logger.error('Revocation failed:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Retrieves credential metadata from on-chain registry.
+   * Used for three-way match verification.
+   * @param dataHash - The keccak256 hash (0x-prefixed)
+   */
+  async getCredential(dataHash: string): Promise<{
+    issuerDid: string;
+    blockTime: number;
+    isRevoked: boolean;
+    exists: boolean;
+  }> {
+    const result = await this.contract.getCredential(dataHash);
     
     return {
-      transactionHash: receipt.hash,
-      blockNumber: receipt.blockNumber.toString(),
+      issuerDid: result.issuerDid,
+      blockTime: Number(result.blockTime),
+      isRevoked: result.isRevoked,
+      exists: result.exists,
     };
   }
 
-  async verifyCertificate(dataHash: string): Promise<any> {
-    const result = await this.contract.verifyCertificate(
-      ethers.hexlify(ethers.toUtf8Bytes(dataHash)),
-    );
-    
-    return {
-      isValid: result[0],
-      timestamp: result[1].toString(),
-      university: result[2],
-    };
+  /**
+   * Checks if a credential exists on-chain.
+   */
+  async credentialExists(dataHash: string): Promise<boolean> {
+    return await this.contract.credentialExists(dataHash);
   }
 }

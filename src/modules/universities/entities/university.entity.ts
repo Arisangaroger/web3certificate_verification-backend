@@ -17,6 +17,12 @@ export class University {
   @Column({ type: 'varchar', length: 255, unique: true, nullable: true })
   did_identifier: string;
 
+  @Column({ type: 'text', nullable: true })
+  encrypted_private_key: string;
+
+  @Column({ type: 'varchar', length: 132, nullable: true })
+  public_key_hex: string;
+
   @Column({ type: 'varchar', length: 255, unique: true })
   email: string;
 
