@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import * as XLSX from 'xlsx';
 import { StudentsService } from '../students/students.service';
 import { CertificatesService } from '../certificates/certificates.service';
+import { BlockchainService } from '../blockchain/blockchain.service';
 
 interface StudentRow {
   student_id_number: string;
@@ -25,6 +26,7 @@ export class FileUploadService {
   constructor(
     private studentsService: StudentsService,
     private certificatesService: CertificatesService,
+    private blockchainService: BlockchainService,
   ) {}
 
   async processExcelFile(fileBuffer: Buffer, university_id: string): Promise<any> {
@@ -181,28 +183,37 @@ export class FileUploadService {
       }
     }
     
-    // Step 2: Create a lookup map: student_id_number -> database UUID
+    // Step 2: Create lookup maps for student records
     const studentIdMap = new Map<string, string>();
+    const studentRecordMap = new Map<string, any>();
     savedStudents.forEach((student) => {
       studentIdMap.set(student.student_id_number, student.id);
+      studentRecordMap.set(student.student_id_number, student);
     });
 
-    // Step 3: Link certificates to students using the map
+    // Step 3: Link certificates to students and compute data hashes
     const certificatesWithStudentIds = certificates.map((cert) => {
       const studentId = studentIdMap.get(cert.student_id_number);
+      const student = studentRecordMap.get(cert.student_id_number);
       
-      if (!studentId) {
+      if (!studentId || !student) {
         throw new Error(`Student not found for certificate: ${cert.student_id_number}`);
       }
 
+      const data_hash = this.blockchainService.generateDataHash({
+        degree_title: cert.degree_title,
+        graduation_year: cert.graduation_year,
+        student,
+      });
+
       return {
         id: this.generateCertificateId(),
-        student_id: studentId, // Link to actual student UUID
+        student_id: studentId,
         university_id: cert.university_id,
         degree_title: cert.degree_title,
         graduation_year: cert.graduation_year,
         class_award: cert.class_award,
-        data_hash: '', // Will be computed after creation
+        data_hash,
         verification_status: 'ISSUED',
       };
     });

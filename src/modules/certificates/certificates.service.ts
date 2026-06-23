@@ -24,6 +24,10 @@ export class CertificatesService {
     });
   }
 
+  async updateDataHash(id: string, data_hash: string): Promise<void> {
+    await this.certificatesRepository.update(id, { data_hash });
+  }
+
   async createBulk(certificates: Partial<Certificate>[]): Promise<Certificate[]> {
     const entities = this.certificatesRepository.create(certificates);
     return this.certificatesRepository.save(entities);

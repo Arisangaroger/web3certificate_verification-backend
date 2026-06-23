@@ -78,6 +78,36 @@ export class UniversitiesService {
   }
 
   /**
+   * Create blockchain identity for a university that does not have one yet.
+   * Safe to call multiple times — existing identity is left unchanged.
+   */
+  async ensureBlockchainIdentity(id: string): Promise<University> {
+    const university = await this.findOne(id);
+
+    if (
+      university.did_identifier &&
+      university.encrypted_private_key &&
+      university.wallet_address
+    ) {
+      return university;
+    }
+
+    this.logger.log(`Provisioning blockchain identity for university: ${university.name}`);
+
+    const identity = this.cryptoService.generateUniversityIdentity();
+    const encryptedPrivateKey = this.cryptoService.encryptPrivateKey(identity.privateKey);
+
+    university.did_identifier = identity.didIdentifier;
+    university.encrypted_private_key = encryptedPrivateKey;
+    university.public_key_hex = identity.publicKey;
+    university.wallet_address = identity.address;
+
+    const saved = await this.universitiesRepository.save(university);
+    this.logger.log(`Provisioned DID for ${saved.name}: ${saved.did_identifier}`);
+    return saved;
+  }
+
+  /**
    * Regenerate blockchain identity for a university (use with caution!)
    * This will invalidate all previous blockchain certificates.
    */

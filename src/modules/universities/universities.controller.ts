@@ -1,9 +1,10 @@
-import { Controller, Get, Post, Body, Param, Patch, Delete, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Patch, Delete, UseGuards, ForbiddenException } from '@nestjs/common';
 import { UniversitiesService } from './universities.service';
 import { Public } from '../../common/decorators/public.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { CreateUniversityDto } from './dto/create-university.dto';
 import { UpdateUniversityDto } from './dto/update-university.dto';
 
@@ -28,6 +29,16 @@ export class UniversitiesController {
   @Roles('SUPER_ADMIN')
   create(@Body() createUniversityDto: CreateUniversityDto) {
     return this.universitiesService.create(createUniversityDto);
+  }
+
+  @Post(':id/provision-identity')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('SUPER_ADMIN', 'REGISTRAR')
+  provisionIdentity(@Param('id') id: string, @CurrentUser() currentUser: any) {
+    if (currentUser.role !== 'SUPER_ADMIN' && currentUser.university_id !== id) {
+      throw new ForbiddenException('You can only provision identity for your own university');
+    }
+    return this.universitiesService.ensureBlockchainIdentity(id);
   }
 
   @Patch(':id')

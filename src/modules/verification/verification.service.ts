@@ -32,6 +32,15 @@ export class VerificationService {
     // Step 2: Runtime Hash Recalculation
     const recomputedHash = this.blockchainService.generateDataHash(certificate);
 
+    // Backfill hash for certificates issued before hash persistence was added
+    if (!certificate.data_hash) {
+      const onChainProbe = await this.blockchainService.getCredential(recomputedHash);
+      if (onChainProbe.exists && !onChainProbe.isRevoked) {
+        await this.certificatesService.updateDataHash(certificate.id, recomputedHash);
+        certificate.data_hash = recomputedHash;
+      }
+    }
+
     // Data tampering check: compare recomputed hash with stored hash
     if (recomputedHash !== certificate.data_hash) {
       return {

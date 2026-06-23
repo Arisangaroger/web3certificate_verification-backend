@@ -71,6 +71,14 @@ export class BlockchainService {
       throw new Error('Empty certificate batch');
     }
 
+    if (!process.env.OPERATOR_PRIVATE_KEY) {
+      throw new Error('Blockchain operator key is not configured on the server');
+    }
+
+    if (!process.env.CREDENTIAL_REGISTRY_ADDRESS) {
+      throw new Error('Credential registry contract address is not configured on the server');
+    }
+
     const dataHashes = certificates.map(cert => this.generateDataHash(cert));
     const issuerDids = certificates.map(() => issuerDid);
 
@@ -78,13 +86,13 @@ export class BlockchainService {
     this.logger.log(`Issuer DID: ${issuerDid}`);
 
     try {
-      const gasEstimate = await this.contract.issueCredentials.estimateGas(
-        dataHashes,
-        issuerDids
-      );
-      this.logger.log(`Estimated gas: ${gasEstimate.toString()}`);
+      // Validate the call off-chain first so contract reverts surface clearly.
+      await this.contract.issueCredentials.staticCall(dataHashes, issuerDids);
 
-      const tx = await this.contract.issueCredentials(dataHashes, issuerDids);
+      const gasLimit = await this.resolveGasLimit(dataHashes, issuerDids, certificates.length);
+      this.logger.log(`Using gas limit: ${gasLimit.toString()}`);
+
+      const tx = await this.contract.issueCredentials(dataHashes, issuerDids, { gasLimit });
       this.logger.log(`Transaction submitted: ${tx.hash}`);
 
       const receipt = await tx.wait(1);
@@ -93,8 +101,60 @@ export class BlockchainService {
       return receipt.hash;
     } catch (error) {
       this.logger.error('Batch minting failed:', error);
-      throw error;
+      throw new Error(this.parseBlockchainError(error));
     }
+  }
+
+  /**
+   * Optimism Sepolia RPC often fails gas estimation with "intrinsic gas too high"
+   * even when the transaction is valid. Fall back to a safe computed limit.
+   */
+  private async resolveGasLimit(
+    dataHashes: string[],
+    issuerDids: string[],
+    batchSize: number,
+  ): Promise<bigint> {
+    const fallbackGasLimit = 80_000n + BigInt(batchSize) * 150_000n;
+
+    try {
+      const gasEstimate = await this.contract.issueCredentials.estimateGas(
+        dataHashes,
+        issuerDids,
+      );
+      this.logger.log(`Estimated gas: ${gasEstimate.toString()}`);
+      return (gasEstimate * 120n) / 100n;
+    } catch (estimateError) {
+      this.logger.warn(
+        `Gas estimation failed, using fallback limit (${fallbackGasLimit.toString()}): ${this.parseBlockchainError(estimateError)}`,
+      );
+      return fallbackGasLimit;
+    }
+  }
+
+  private parseBlockchainError(error: unknown): string {
+    if (!(error instanceof Error)) {
+      return 'Unknown blockchain error';
+    }
+
+    const err = error as Error & {
+      reason?: string;
+      shortMessage?: string;
+      info?: { error?: { message?: string } };
+    };
+
+    if (err.reason) {
+      return err.reason;
+    }
+
+    if (err.info?.error?.message) {
+      return err.info.error.message;
+    }
+
+    if (err.shortMessage) {
+      return err.shortMessage;
+    }
+
+    return err.message || 'Blockchain transaction failed';
   }
 
   /**

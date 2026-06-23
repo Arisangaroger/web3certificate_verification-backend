@@ -3,13 +3,13 @@ import { FileUploadService } from './file-upload.service';
 import { FileUploadController } from './file-upload.controller';
 import { StudentsModule } from '../students/students.module';
 import { CertificatesModule } from '../certificates/certificates.module';
-// import { BlockchainModule } from '../blockchain/blockchain.module'; // DISABLED
+import { BlockchainModule } from '../blockchain/blockchain.module';
 
 @Module({
   imports: [
-    StudentsModule, 
-    CertificatesModule, 
-    // BlockchainModule // DISABLED - Will be enabled when blockchain is ready
+    StudentsModule,
+    CertificatesModule,
+    BlockchainModule,
   ],
   controllers: [FileUploadController],
   providers: [FileUploadService],

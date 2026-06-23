@@ -56,14 +56,8 @@ export class CertificatesController {
       throw new BadRequestException('No certificates selected');
     }
 
-    // 2. Load university with blockchain identity
-    const university = await this.universitiesService.findOne(universityId);
-    
-    if (!university.did_identifier) {
-      throw new BadRequestException(
-        'University does not have blockchain identity configured. Contact system administrator.'
-      );
-    }
+    // 2. Load university and provision blockchain identity if missing
+    const university = await this.universitiesService.ensureBlockchainIdentity(universityId);
 
     // 3. Load certificates with student relations
     const certificates = await this.certificatesRepository.find({
@@ -88,35 +82,42 @@ export class CertificatesController {
     }
 
     // 5. Issue to blockchain
-    const txHash = await this.blockchainService.issueCertificatesBatch(
-      certificates,
-      university.did_identifier
-    );
+    try {
+      const txHash = await this.blockchainService.issueCertificatesBatch(
+        certificates,
+        university.did_identifier
+      );
 
-    // 6. Update database with transaction hash - Update each certificate individually to ensure it works
-    const updatePromises = body.certificateIds.map(certId =>
-      this.certificatesRepository.update(
-        { id: certId },
-        {
-          blockchain_transaction_hash: txHash,
-          verification_status: 'VERIFIED'
-        }
-      )
-    );
-    
-    await Promise.all(updatePromises);
+      // 6. Update database with transaction hash and persisted data hash
+      const updatePromises = certificates.map(cert =>
+        this.certificatesRepository.update(
+          { id: cert.id },
+          {
+            blockchain_transaction_hash: txHash,
+            verification_status: 'VERIFIED',
+            data_hash: this.blockchainService.generateDataHash(cert),
+          }
+        )
+      );
+      
+      await Promise.all(updatePromises);
 
-    // Log for debugging
-    console.log(`✅ Updated ${body.certificateIds.length} certificates to VERIFIED status`);
-    console.log(`Transaction hash: ${txHash}`);
+      // Log for debugging
+      console.log(`✅ Updated ${body.certificateIds.length} certificates to VERIFIED status`);
+      console.log(`Transaction hash: ${txHash}`);
 
-    // 7. Return success response
-    return {
-      success: true,
-      transactionHash: txHash,
-      certificatesIssued: certificates.length,
-      explorerUrl: `https://sepolia-optimistic.etherscan.io/tx/${txHash}`
-    };
+      // 7. Return success response
+      return {
+        success: true,
+        transactionHash: txHash,
+        certificatesIssued: certificates.length,
+        explorerUrl: `https://sepolia-optimistic.etherscan.io/tx/${txHash}`
+      };
+    } catch (error: any) {
+      throw new BadRequestException(
+        error?.message || 'Failed to issue certificates to blockchain',
+      );
+    }
   }
 
   /**
@@ -184,6 +185,7 @@ export class CertificatesController {
       class_award: certificate.class_award,
       verification_status: certificate.verification_status,
       blockchain_hash: certificate.blockchain_transaction_hash,
+      issued_date: certificate.created_at,
     };
 
     // Generate PDF
